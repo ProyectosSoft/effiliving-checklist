@@ -1,9 +1,10 @@
-import type { NextConfig } from "next";
+import type { NextConfig } from "next"
 
 const nextConfig: NextConfig = {
-  /* config options here */
   cacheComponents: true,
   partialPrefetching: true,
+  // Generación de PDF/Excel en el servidor: se cargan desde node_modules sin empaquetar.
+  serverExternalPackages: ["exceljs", "jspdf", "jspdf-autotable"],
   turbopack: {
     rules: {
       "*.css": {
@@ -12,6 +13,6 @@ const nextConfig: NextConfig = {
       },
     },
   },
-};
+}
 
-export default nextConfig;
+export default nextConfig
