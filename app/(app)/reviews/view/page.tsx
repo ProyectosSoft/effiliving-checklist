@@ -1,29 +1,66 @@
-import type { Metadata } from "next"
+"use client"
+
+import { Suspense, useState } from "react"
 import Link from "next/link"
-import { notFound } from "next/navigation"
-import { Alert, Badge, PageHeader, toneFor } from "@/components/ui"
-import { requireUser } from "@/lib/auth"
+import { useSearchParams } from "next/navigation"
+import { useAuth } from "@/components/auth-provider"
+import { Alert, Badge, EmptyState, LoadError, Loading, PageHeader, toneFor } from "@/components/ui"
+import { RefreshContext, useData } from "@/components/use-data"
+import { canEditReview } from "@/lib/can-edit"
 import { formatDate, formatDateTime, label, RESULT_STATUSES, REVIEW_STATUSES, REVIEW_TYPES } from "@/lib/constants"
-import { fetchReview, groupResults, summarize } from "@/lib/reviews"
-import { createClient } from "@/lib/supabase/server"
-import { canEditReview } from "./can-edit"
+import { fetchReview, groupResults, summarize, type ReviewDetail } from "@/lib/reviews"
+import { createClient } from "@/lib/supabase/client"
 import { ReviewAdminActions } from "./review-admin-actions"
 
-export const metadata: Metadata = { title: "Detalle de revisión" }
+export default function ReviewPage() {
+  return (
+    <Suspense fallback={<Loading />}>
+      <ReviewView />
+    </Suspense>
+  )
+}
 
-export default async function ReviewPage({ params }: PageProps<"/reviews/[id]">) {
-  const user = await requireUser()
-  const { id } = await params
-  const supabase = await createClient()
-  const review = await fetchReview(supabase, id)
-  if (!review) notFound()
+function ExportButtons({ review }: { review: ReviewDetail }) {
+  const [busy, setBusy] = useState(false)
+  const name = `revision-${review.room?.number ?? "espacio"}-${review.review_date ?? ""}`.replace(/[^\w.-]+/g, "_")
+
+  async function run(format: "pdf" | "xlsx") {
+    setBusy(true)
+    try {
+      const { download, reviewToPdf, reviewToXlsx } = await import("@/lib/export")
+      download(format === "pdf" ? reviewToPdf(review) : await reviewToXlsx(review), `${name}.${format}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <>
+      <button className="btn" disabled={busy} onClick={() => run("pdf")}>
+        Exportar PDF
+      </button>
+      <button className="btn" disabled={busy} onClick={() => run("xlsx")}>
+        Exportar Excel
+      </button>
+    </>
+  )
+}
+
+function ReviewView() {
+  const id = useSearchParams().get("id") ?? ""
+  const { user } = useAuth()
+  const { data: review, error, loading, reload } = useData(() => fetchReview(createClient(), id), id)
+
+  if (error) return <LoadError message={error} />
+  if (loading && !review) return <Loading />
+  if (!review || !user) return <EmptyState>Revisión no encontrada.</EmptyState>
 
   const groups = groupResults(review.results)
   const totals = summarize(review.results.map((r) => r.status))
   const editable = canEditReview(user, review)
 
   return (
-    <>
+    <RefreshContext.Provider value={reload}>
       <PageHeader
         title={`${review.room?.property?.name ?? "—"} · ${review.room?.number ?? "—"}`}
         description={
@@ -33,14 +70,9 @@ export default async function ReviewPage({ params }: PageProps<"/reviews/[id]">)
         }
         actions={
           <>
-            <a className="btn" href={`/reviews/${id}/export?format=pdf`}>
-              Exportar PDF
-            </a>
-            <a className="btn" href={`/reviews/${id}/export?format=xlsx`}>
-              Exportar Excel
-            </a>
+            <ExportButtons review={review} />
             {editable && (
-              <Link className="btn btn-primary" href={`/reviews/${id}/edit`}>
+              <Link className="btn btn-primary" href={`/reviews/edit/?id=${id}`}>
                 {review.status === "completada" ? "Editar" : "Continuar revisión"}
               </Link>
             )}
@@ -52,7 +84,10 @@ export default async function ReviewPage({ params }: PageProps<"/reviews/[id]">)
         <dl className="card grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3">
           <Info term="Hotel" value={review.room?.property?.name} />
           <Info term="Piso" value={review.room?.floor} />
-          <Info term="Habitación" value={`${review.room?.number ?? "—"}${review.room?.room_type ? ` · ${review.room.room_type}` : ""}`} />
+          <Info
+            term="Habitación"
+            value={`${review.room?.number ?? "—"}${review.room?.room_type ? ` · ${review.room.room_type}` : ""}`}
+          />
           <Info term="Tipo de revisión" value={label(REVIEW_TYPES, review.review_type)} />
           <Info term="Fecha" value={formatDate(review.review_date)} />
           <Info term="Revisado por" value={review.reviewer?.full_name} />
@@ -123,7 +158,7 @@ export default async function ReviewPage({ params }: PageProps<"/reviews/[id]">)
 
         {user.permissions.reviews_all && <ReviewAdminActions id={id} completed={review.status === "completada"} />}
       </div>
-    </>
+    </RefreshContext.Provider>
   )
 }
 

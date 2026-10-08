@@ -1,7 +1,4 @@
-import "server-only"
-import type { createClient } from "@/lib/supabase/server"
-
-type Supabase = Awaited<ReturnType<typeof createClient>>
+import type { Supabase } from "@/lib/supabase/client"
 
 export type ReviewFilters = {
   property?: string
@@ -15,10 +12,10 @@ export type ReviewFilters = {
 
 const FILTER_KEYS = ["property", "room", "from", "to", "inspector", "status", "type"] as const
 
-export function parseFilters(params: Record<string, string | string[] | undefined>): ReviewFilters {
+export function parseFilters(params: URLSearchParams): ReviewFilters {
   const out: ReviewFilters = {}
   for (const key of FILTER_KEYS) {
-    const value = params[key]
+    const value = params.get(key)
     if (typeof value === "string" && value.trim()) out[key] = value.trim()
   }
   return out

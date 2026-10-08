@@ -1,10 +1,7 @@
-"use server"
-
-import { revalidatePath } from "next/cache"
 import { z } from "zod"
-import { assertPermission } from "@/lib/auth"
-import { check, run } from "@/lib/actions"
-import { createClient } from "@/lib/supabase/server"
+import { check, requireRows, run } from "@/lib/actions"
+import { createClient } from "@/lib/supabase/client"
+import { sessionUserId } from "./session"
 
 const reviewSchema = z.object({
   id: z.uuid().optional(),
@@ -30,9 +27,38 @@ const reviewSchema = z.object({
 
 export type ReviewInput = z.input<typeof reviewSchema>
 
+// Hoteles con habitaciones y plantilla del checklist para el formulario de revisión.
+// includeItemIds: ítems a mostrar aunque estén inactivos (ya evaluados en la revisión).
+export async function loadReviewFormData(includeItemIds: string[] = []) {
+  const supabase = createClient()
+  const [{ data: properties, error: e1 }, { data: categories, error: e2 }] = await Promise.all([
+    supabase.from("properties").select("id, name, rooms(id, number, floor, room_type)").order("name"),
+    supabase
+      .from("checklist_categories")
+      .select("id, name, sort_order, items:checklist_items(id, label, description, sort_order, active)")
+      .order("sort_order")
+      .order("created_at"),
+  ])
+  if (e1 || e2) throw e1 ?? e2
+
+  const keep = new Set(includeItemIds)
+  const template = (categories ?? [])
+    .map((c) => ({
+      id: c.id,
+      name: c.name,
+      items: c.items
+        .filter((i) => i.active || keep.has(i.id))
+        .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+        .map(({ id, label, description }) => ({ id, label, description })),
+    }))
+    .filter((c) => c.items.length > 0)
+
+  return { properties: properties ?? [], categories: template }
+}
+
 export async function saveReview(input: ReviewInput) {
   return run(async () => {
-    const user = await assertPermission()
+    const userId = await sessionUserId()
     const v = reviewSchema.parse(input)
 
     if (v.complete) {
@@ -40,7 +66,7 @@ export async function saveReview(input: ReviewInput) {
       if (missing > 0) throw new Error(`Faltan ${missing} ítems por evaluar para completar la revisión.`)
     }
 
-    const supabase = await createClient()
+    const supabase = createClient()
     let reviewId = v.id
 
     if (reviewId) {
@@ -59,7 +85,7 @@ export async function saveReview(input: ReviewInput) {
           .from("checklist_reviews")
           .insert({
             room_id: v.roomId,
-            reviewer_id: user.id,
+            reviewer_id: userId,
             review_type: v.reviewType,
             review_date: v.reviewDate,
             status: "en_progreso",
@@ -110,29 +136,21 @@ export async function saveReview(input: ReviewInput) {
       check(await supabase.from("checklist_reviews").update({ status: "completada" }).eq("id", reviewId))
     }
 
-    revalidatePath("/reviews")
-    revalidatePath(`/reviews/${reviewId}`)
-    revalidatePath("/dashboard")
     return reviewId
   })
 }
 
+// Permiso requerido (RLS): reviews_all.
 export async function reopenReview(id: string) {
   return run(async () => {
-    await assertPermission("reviews_all")
-    const supabase = await createClient()
-    check(await supabase.from("checklist_reviews").update({ status: "en_progreso" }).eq("id", id))
-    revalidatePath(`/reviews/${id}`)
-    revalidatePath("/reviews")
+    requireRows(
+      await createClient().from("checklist_reviews").update({ status: "en_progreso" }).eq("id", id).select("id"),
+    )
   })
 }
 
 export async function deleteReview(id: string) {
   return run(async () => {
-    await assertPermission("reviews_all")
-    const supabase = await createClient()
-    check(await supabase.from("checklist_reviews").delete().eq("id", id))
-    revalidatePath("/reviews")
-    revalidatePath("/dashboard")
+    requireRows(await createClient().from("checklist_reviews").delete().eq("id", id).select("id"))
   })
 }

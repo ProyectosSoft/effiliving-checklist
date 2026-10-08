@@ -1,4 +1,3 @@
-import "server-only"
 import ExcelJS from "exceljs"
 import { jsPDF } from "jspdf"
 import { autoTable } from "jspdf-autotable"
@@ -8,6 +7,17 @@ import { groupResults, summarize, type fetchResults, type ReviewDetail, type Rev
 type ResultRow = Awaited<ReturnType<typeof fetchResults>>[number]
 
 const BRAND: [number, number, number] = [36, 116, 102]
+const XLSX_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+// Descarga un archivo generado en el navegador.
+export function download(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement("a")
+  a.href = url
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
 
 function styleHeader(sheet: ExcelJS.Worksheet) {
   const header = sheet.getRow(1)
@@ -93,7 +103,7 @@ export async function reviewsToXlsx(rows: ReviewRow[], results: ResultRow[]) {
   }
   styleHeader(detail)
 
-  return Buffer.from(await wb.xlsx.writeBuffer())
+  return new Blob([await wb.xlsx.writeBuffer()], { type: XLSX_TYPE })
 }
 
 export function reviewsToPdf(rows: ReviewRow[], results: ResultRow[], filtersText: string) {
@@ -129,7 +139,7 @@ export function reviewsToPdf(rows: ReviewRow[], results: ResultRow[], filtersTex
     styles: { fontSize: 8 },
     headStyles: { fillColor: BRAND },
   })
-  return Buffer.from(doc.output("arraybuffer"))
+  return doc.output("blob")
 }
 
 // ---- Revisión individual ---------------------------------------------------
@@ -176,7 +186,7 @@ export async function reviewToXlsx(review: ReviewDetail) {
       sheet.addRow([s.role_label ?? "", s.signer_name ?? "", s.signed_at ? "VoBo" : "Sin VoBo", formatDateTime(s.signed_at)])
     }
   }
-  return Buffer.from(await wb.xlsx.writeBuffer())
+  return new Blob([await wb.xlsx.writeBuffer()], { type: XLSX_TYPE })
 }
 
 export function reviewToPdf(review: ReviewDetail) {
@@ -224,5 +234,5 @@ export function reviewToPdf(review: ReviewDetail) {
     })
   }
 
-  return Buffer.from(doc.output("arraybuffer"))
+  return doc.output("blob")
 }

@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation"
 import { Alert } from "@/components/ui"
 import { useAction } from "@/components/use-action"
-import { deleteReview, reopenReview } from "../actions"
+import { deleteReview, reopenReview } from "@/lib/data/reviews"
 
 export function ReviewAdminActions({ id, completed }: { id: string; completed: boolean }) {
   const router = useRouter()

@@ -7,7 +7,7 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { Alert } from "@/components/ui"
 import { useAction } from "@/components/use-action"
-import { createProperty, deleteProperty, updateProperty, type PropertyInput } from "./actions"
+import { createProperty, deleteProperty, updateProperty, type PropertyInput } from "@/lib/data/properties"
 
 const schema = z.object({
   name: z.string().trim().min(1, "El nombre es obligatorio"),
@@ -59,7 +59,7 @@ export function NewPropertyForm() {
           () => createProperty(values),
           (id) => {
             form.reset()
-            if (id) router.push(`/properties/${id}`)
+            if (id) router.push(`/properties/view/?id=${id}`)
           },
         ),
       )}

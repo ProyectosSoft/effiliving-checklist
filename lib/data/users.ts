@@ -1,12 +1,10 @@
-"use server"
-
-import { revalidatePath } from "next/cache"
 import { z } from "zod"
-import { assertPermission } from "@/lib/auth"
-import { check, run } from "@/lib/actions"
-import { PERMISSION_KEYS, type PermissionSet } from "@/lib/permissions"
-import { createAdminClient } from "@/lib/supabase/admin"
-import { createClient } from "@/lib/supabase/server"
+import { check, requireRows, run } from "@/lib/actions"
+import { PERMISSION_KEYS, parsePermissions, type PermissionSet } from "@/lib/permissions"
+import { appUrl, createClient } from "@/lib/supabase/client"
+import { sessionUserId } from "./session"
+
+// Permiso requerido (RLS / Edge Function): users_manage.
 
 // El trigger handle_new_user asigna este rol por nombre a los usuarios nuevos.
 const DEFAULT_ROLE = "inspector"
@@ -35,64 +33,70 @@ const roleSchema = z.object({
   permissions: z.record(z.string(), z.boolean()),
 })
 
-function done() {
-  revalidatePath("/users")
-}
-
-function siteUrl() {
-  return (process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000").replace(/\/$/, "")
+export async function loadUsersAndRoles() {
+  const supabase = createClient()
+  const [{ data: profiles, error: e1 }, { data: roles, error: e2 }] = await Promise.all([
+    supabase.from("profiles").select("id, full_name, email, role_id, active, created_at").order("full_name"),
+    supabase.from("roles").select("id, name, description, permissions").order("name"),
+  ])
+  if (e1 || e2) throw e1 ?? e2
+  const usage = new Map<string, number>()
+  for (const p of profiles ?? []) if (p.role_id) usage.set(p.role_id, (usage.get(p.role_id) ?? 0) + 1)
+  return {
+    profiles: profiles ?? [],
+    roles: (roles ?? []).map((r) => ({
+      ...r,
+      permissions: parsePermissions(r.permissions),
+      users: usage.get(r.id) ?? 0,
+    })),
+  }
 }
 
 // ---- Usuarios -------------------------------------------------------------
 
+// La invitación necesita la service role key: la hace la Edge Function "invite-user"
+// (supabase/functions/invite-user), que verifica users_manage del usuario que llama.
 export async function inviteUser(input: z.input<typeof inviteSchema>) {
   return run(async () => {
-    await assertPermission("users_manage")
     const v = inviteSchema.parse(input)
-    const admin = createAdminClient()
-
-    const { data, error } = await admin.auth.admin.inviteUserByEmail(v.email, {
-      data: { full_name: v.fullName },
-      redirectTo: `${siteUrl()}/auth/confirm?next=/account/password`,
+    const { data, error } = await createClient().functions.invoke<{ error?: string }>("invite-user", {
+      body: { ...v, redirectTo: appUrl("/auth/confirm/?next=/account/password/") },
     })
     if (error) {
+      let message = error.message
+      try {
+        const body = await (error as { context?: Response }).context?.json()
+        if (body?.error) message = body.error
+      } catch {}
       throw new Error(
-        /already been registered|already exists/i.test(error.message)
-          ? "Ya existe un usuario con ese correo."
-          : `No se pudo enviar la invitación: ${error.message}`,
+        /Failed to send a request|not found/i.test(message)
+          ? "La función de invitaciones no está desplegada en Supabase (supabase/functions/invite-user)."
+          : message,
       )
     }
-
-    // El trigger ya creó el perfil con rol inspector: asignar el rol elegido.
-    check(
-      await admin
-        .from("profiles")
-        .update({ full_name: v.fullName, role_id: v.roleId })
-        .eq("id", data.user.id),
-    )
-    done()
+    if (data?.error) throw new Error(data.error)
   })
 }
 
 export async function updateProfile(id: string, input: z.input<typeof profileSchema>) {
   return run(async () => {
-    const me = await assertPermission("users_manage")
+    const meId = await sessionUserId()
     const v = profileSchema.parse(input)
-    const supabase = await createClient()
+    const supabase = createClient()
 
-    if (id === me.id) {
+    if (id === meId) {
       const { data: current } = check(await supabase.from("profiles").select("role_id").eq("id", id).single())
       if (!v.active) throw new Error("No puedes desactivar tu propio usuario.")
       if (current?.role_id !== v.roleId) throw new Error("No puedes cambiar tu propio rol.")
     }
 
-    check(
+    requireRows(
       await supabase
         .from("profiles")
         .update({ full_name: v.fullName, role_id: v.roleId, active: v.active })
-        .eq("id", id),
+        .eq("id", id)
+        .select("id"),
     )
-    done()
   })
 }
 
@@ -104,27 +108,22 @@ function normalizePermissions(input: Record<string, boolean>): PermissionSet {
 
 export async function createRole(input: z.input<typeof roleSchema>) {
   return run(async () => {
-    await assertPermission("users_manage")
     const v = roleSchema.parse(input)
-    const supabase = await createClient()
     check(
-      await supabase.from("roles").insert({
-        name: v.name,
-        description: v.description || null,
-        permissions: normalizePermissions(v.permissions),
-      }),
+      await createClient()
+        .from("roles")
+        .insert({ name: v.name, description: v.description || null, permissions: normalizePermissions(v.permissions) }),
     )
-    done()
   })
 }
 
 export async function updateRole(id: string, input: z.input<typeof roleSchema>) {
   return run(async () => {
-    const me = await assertPermission("users_manage")
+    const meId = await sessionUserId()
     const v = roleSchema.parse(input)
-    const supabase = await createClient()
+    const supabase = createClient()
     const { data: role } = check(await supabase.from("roles").select("name").eq("id", id).single())
-    const { data: myProfile } = check(await supabase.from("profiles").select("role_id").eq("id", me.id).single())
+    const { data: myProfile } = check(await supabase.from("profiles").select("role_id").eq("id", meId).single())
 
     if (role?.name === DEFAULT_ROLE && v.name !== DEFAULT_ROLE) {
       throw new Error(`El rol "${DEFAULT_ROLE}" no se puede renombrar: se asigna a los usuarios nuevos.`)
@@ -134,27 +133,25 @@ export async function updateRole(id: string, input: z.input<typeof roleSchema>) 
       throw new Error("No puedes quitar 'Gestionar usuarios y roles' a tu propio rol.")
     }
 
-    check(
+    requireRows(
       await supabase
         .from("roles")
         .update({ name: v.name, description: v.description || null, permissions })
-        .eq("id", id),
+        .eq("id", id)
+        .select("id"),
     )
-    done()
   })
 }
 
 export async function deleteRole(id: string) {
   return run(async () => {
-    await assertPermission("users_manage")
-    const supabase = await createClient()
+    const supabase = createClient()
     const { data: role } = check(await supabase.from("roles").select("name").eq("id", id).single())
     if (role?.name === DEFAULT_ROLE) throw new Error(`El rol "${DEFAULT_ROLE}" no se puede eliminar.`)
     const { count } = check(
       await supabase.from("profiles").select("id", { count: "exact", head: true }).eq("role_id", id),
     )
     if (count) throw new Error(`No se puede eliminar: ${count} usuario(s) tienen este rol.`)
-    check(await supabase.from("roles").delete().eq("id", id))
-    done()
+    requireRows(await supabase.from("roles").delete().eq("id", id).select("id"))
   })
 }

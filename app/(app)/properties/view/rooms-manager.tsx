@@ -4,7 +4,7 @@ import { useState } from "react"
 import { Alert, EmptyState } from "@/components/ui"
 import { useAction } from "@/components/use-action"
 import { groupByFloor } from "@/lib/rooms"
-import { createRoomsBulk, deleteRoom, updateRoom } from "../actions"
+import { createRoomsBulk, deleteRoom, updateRoom } from "@/lib/data/properties"
 
 type Room = { id: string; number: string; floor: string | null; room_type: string | null }
 
@@ -85,7 +85,7 @@ export function RoomsManager({ propertyId, rooms }: { propertyId: string; rooms:
           </h3>
           <ul className="divide-y divide-slate-100">
             {rooms.map((room) => (
-              <RoomRow key={room.id} room={room} propertyId={propertyId} />
+              <RoomRow key={room.id} room={room} />
             ))}
           </ul>
         </section>
@@ -94,7 +94,7 @@ export function RoomsManager({ propertyId, rooms }: { propertyId: string; rooms:
   )
 }
 
-function RoomRow({ room, propertyId }: { room: Room; propertyId: string }) {
+function RoomRow({ room }: { room: Room }) {
   const { pending, error, exec } = useAction()
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState({ number: "", floor: "", roomType: "" })
@@ -106,7 +106,7 @@ function RoomRow({ room, propertyId }: { room: Room; propertyId: string }) {
           className="flex flex-wrap gap-2"
           onSubmit={(e) => {
             e.preventDefault()
-            exec(() => updateRoom(room.id, propertyId, form), () => setEditing(false))
+            exec(() => updateRoom(room.id, form), () => setEditing(false))
           }}
         >
           <input
@@ -153,7 +153,7 @@ function RoomRow({ room, propertyId }: { room: Room; propertyId: string }) {
             className="btn btn-sm btn-danger"
             disabled={pending}
             onClick={() => {
-              if (confirm(`¿Eliminar ${room.number} y sus revisiones?`)) exec(() => deleteRoom(room.id, propertyId))
+              if (confirm(`¿Eliminar ${room.number} y sus revisiones?`)) exec(() => deleteRoom(room.id))
             }}
           >
             Eliminar

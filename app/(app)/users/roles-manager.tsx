@@ -4,7 +4,7 @@ import { useState } from "react"
 import { Alert } from "@/components/ui"
 import { useAction } from "@/components/use-action"
 import { PERMISSION_KEYS, PERMISSIONS, type PermissionSet } from "@/lib/permissions"
-import { createRole, deleteRole, updateRole } from "./actions"
+import { createRole, deleteRole, updateRole } from "@/lib/data/users"
 
 type Role = { id: string; name: string; description: string | null; permissions: PermissionSet; users: number }
 

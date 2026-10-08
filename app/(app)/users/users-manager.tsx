@@ -6,7 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
 import { Alert, Badge } from "@/components/ui"
 import { useAction } from "@/components/use-action"
-import { inviteUser, updateProfile } from "./actions"
+import { inviteUser, updateProfile } from "@/lib/data/users"
 
 type Profile = {
   id: string

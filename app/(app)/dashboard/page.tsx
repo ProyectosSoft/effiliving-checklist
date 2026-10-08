@@ -1,31 +1,38 @@
-import type { Metadata } from "next"
+"use client"
+
+import { Suspense } from "react"
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
+import { useAuth } from "@/components/auth-provider"
 import { PropertyStatusChart, TopPendingChart } from "@/components/dashboard-charts"
 import { ReviewFilters } from "@/components/review-filters"
-import { Alert, Badge, EmptyState, PageHeader, toneFor } from "@/components/ui"
-import { requireUser } from "@/lib/auth"
+import { Alert, Badge, EmptyState, LoadError, Loading, PageHeader, toneFor } from "@/components/ui"
+import { useData } from "@/components/use-data"
 import { formatDate, label, REVIEW_STATUSES, REVIEW_TYPES } from "@/lib/constants"
-import { fetchResults, parseFilters, queryReviews, summarize } from "@/lib/reviews"
-import { createClient } from "@/lib/supabase/server"
+import { loadReviewList } from "@/lib/data/review-list"
+import { filtersToQuery, parseFilters, summarize } from "@/lib/reviews"
 
-export const metadata: Metadata = { title: "Dashboard" }
+export default function DashboardPage() {
+  return (
+    <Suspense fallback={<Loading />}>
+      <Dashboard />
+    </Suspense>
+  )
+}
 
-export default async function DashboardPage({ searchParams }: PageProps<"/dashboard">) {
-  const user = await requireUser()
-  const params = await searchParams
+function Dashboard() {
+  const { user } = useAuth()
+  const params = useSearchParams()
   const { property, from, to, inspector } = parseFilters(params)
-  const seeAll = user.permissions.dashboard_all
+  const seeAll = user?.permissions.dashboard_all ?? false
   // Sin dashboard_all, el dashboard se limita a las revisiones propias.
-  const filters = { property, from, to, inspector: seeAll ? inspector : user.id }
+  const filters = { property, from, to, inspector: seeAll ? inspector : user?.id }
+  const query = filtersToQuery(filters)
+  const { data, error } = useData(() => loadReviewList(filters), query)
 
-  const supabase = await createClient()
-  const [{ data: reviews }, { data: properties }, { data: profiles }] = await Promise.all([
-    queryReviews(supabase, filters),
-    supabase.from("properties").select("id, name").order("name"),
-    supabase.from("profiles").select("id, full_name").order("full_name"),
-  ])
-  const rows = reviews ?? []
-  const results = await fetchResults(supabase, rows.map((r) => r.id))
+  if (error) return <LoadError message={error} />
+  if (!data) return <Loading />
+  const { rows, results, properties, inspectors } = data
 
   const totals = summarize(results.map((r) => r.status))
   const completed = rows.filter((r) => r.status === "completada").length
@@ -79,17 +86,18 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
         }
       />
 
-      {params.error === "sin-permiso" && (
+      {params.get("error") === "sin-permiso" && (
         <div className="mb-4">
           <Alert>No tienes permiso para acceder a esa sección.</Alert>
         </div>
       )}
 
       <ReviewFilters
+        key={query}
         action="/dashboard"
         filters={filters}
-        properties={properties ?? []}
-        inspectors={seeAll ? (profiles ?? []).map((p) => ({ id: p.id, name: p.full_name })) : undefined}
+        properties={properties}
+        inspectors={seeAll ? inspectors : undefined}
         fields={["property", "dates", "inspector"]}
       />
 
@@ -194,7 +202,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
                   {recent.map((r) => (
                     <tr key={r.id}>
                       <td className="whitespace-nowrap">
-                        <Link href={`/reviews/${r.id}`} className="text-brand-700 hover:underline">
+                        <Link href={`/reviews/view/?id=${r.id}`} className="text-brand-700 hover:underline">
                           {formatDate(r.review_date)}
                         </Link>
                       </td>

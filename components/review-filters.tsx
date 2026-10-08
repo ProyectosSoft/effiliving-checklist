@@ -1,10 +1,14 @@
+"use client"
+
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { REVIEW_STATUSES, REVIEW_TYPES } from "@/lib/constants"
 import type { ReviewFilters as Filters } from "@/lib/reviews"
 
 type Option = { id: string; name: string }
 
-// Formulario GET: los filtros viajan en la URL (compartible y sin JS).
+// Los filtros viajan en la URL (compartible). El key del formulario debe cambiar con
+// los filtros para que los defaultValue se reinicien al navegar.
 export function ReviewFilters({
   action,
   filters,
@@ -18,10 +22,20 @@ export function ReviewFilters({
   inspectors?: Option[]
   fields: ("property" | "room" | "dates" | "inspector" | "status" | "type")[]
 }) {
+  const router = useRouter()
   const show = (f: (typeof fields)[number]) => fields.includes(f)
 
   return (
-    <form action={action} className="card mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <form
+      className="card mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+      onSubmit={(e) => {
+        e.preventDefault()
+        const data = new FormData(e.currentTarget)
+        const query = new URLSearchParams()
+        for (const [k, v] of data) if (typeof v === "string" && v.trim()) query.set(k, v.trim())
+        router.push(`${action}/${query.size ? `?${query}` : ""}`)
+      }}
+    >
       {show("property") && (
         <div>
           <label className="label" htmlFor="f-property">

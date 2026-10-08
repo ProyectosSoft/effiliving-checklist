@@ -1,10 +1,8 @@
-"use server"
-
-import { revalidatePath } from "next/cache"
 import { z } from "zod"
-import { assertPermission } from "@/lib/auth"
-import { check, run } from "@/lib/actions"
-import { createClient } from "@/lib/supabase/server"
+import { check, requireRows, run } from "@/lib/actions"
+import { createClient } from "@/lib/supabase/client"
+
+// Permiso requerido (RLS) para escribir: properties_manage.
 
 const optional = z.string().trim().max(200).optional().default("")
 const propertySchema = z.object({
@@ -21,72 +19,61 @@ const roomSchema = z.object({
 export type PropertyInput = z.input<typeof propertySchema>
 export type RoomInput = z.input<typeof roomSchema>
 
-function done(propertyId?: string) {
-  revalidatePath("/properties")
-  if (propertyId) revalidatePath(`/properties/${propertyId}`)
+export async function loadProperties() {
+  const { data, error } = await createClient()
+    .from("properties")
+    .select("id, name, address, city, rooms(count)")
+    .order("name")
+  if (error) throw error
+  return data ?? []
+}
+
+export async function loadProperty(id: string) {
+  const { data, error } = await createClient()
+    .from("properties")
+    .select("id, name, address, city, rooms(id, number, floor, room_type)")
+    .eq("id", id)
+    .maybeSingle()
+  if (error) throw error
+  return data
 }
 
 // ---- Hoteles --------------------------------------------------------------
 
 export async function createProperty(input: PropertyInput) {
   return run(async () => {
-    await assertPermission("properties_manage")
     const v = propertySchema.parse(input)
-    const supabase = await createClient()
     const { data } = check(
-      await supabase
+      await createClient()
         .from("properties")
         .insert({ name: v.name, address: v.address || null, city: v.city || null })
         .select("id")
         .single(),
     )
-    done()
     return data!.id
   })
 }
 
 export async function updateProperty(id: string, input: PropertyInput) {
   return run(async () => {
-    await assertPermission("properties_manage")
     const v = propertySchema.parse(input)
-    const supabase = await createClient()
-    check(
-      await supabase
+    requireRows(
+      await createClient()
         .from("properties")
         .update({ name: v.name, address: v.address || null, city: v.city || null })
-        .eq("id", id),
+        .eq("id", id)
+        .select("id"),
     )
-    done(id)
   })
 }
 
 export async function deleteProperty(id: string) {
   return run(async () => {
-    await assertPermission("properties_manage")
-    const supabase = await createClient()
-    check(await supabase.from("properties").delete().eq("id", id))
-    done()
+    requireRows(await createClient().from("properties").delete().eq("id", id).select("id"))
   })
 }
 
 // ---- Habitaciones ---------------------------------------------------------
-
-export async function createRoom(propertyId: string, input: RoomInput) {
-  return run(async () => {
-    await assertPermission("properties_manage")
-    const v = roomSchema.parse(input)
-    const supabase = await createClient()
-    check(
-      await supabase.from("rooms").insert({
-        property_id: propertyId,
-        number: v.number,
-        floor: v.floor || null,
-        room_type: v.roomType || null,
-      }),
-    )
-    done(propertyId)
-  })
-}
 
 // "101-110, 115, Lobby" → ["101", ..., "110", "115", "Lobby"]
 function expandNumbers(spec: string): string[] {
@@ -109,13 +96,10 @@ export async function createRoomsBulk(
   input: { numbers: string; floor?: string; roomType?: string },
 ) {
   return run(async () => {
-    await assertPermission("properties_manage")
     const numbers = expandNumbers(input.numbers)
     if (numbers.length === 0) throw new Error("Indica al menos un número de habitación.")
-    const supabase = await createClient()
-    const { data: existing } = check(
-      await supabase.from("rooms").select("number").eq("property_id", propertyId),
-    )
+    const supabase = createClient()
+    const { data: existing } = check(await supabase.from("rooms").select("number").eq("property_id", propertyId))
     const taken = new Set((existing ?? []).map((r) => r.number))
     const fresh = numbers.filter((n) => !taken.has(n))
     if (fresh.length > 0) {
@@ -130,31 +114,25 @@ export async function createRoomsBulk(
         ),
       )
     }
-    done(propertyId)
     return { created: fresh.length, skipped: numbers.length - fresh.length }
   })
 }
 
-export async function updateRoom(id: string, propertyId: string, input: RoomInput) {
+export async function updateRoom(id: string, input: RoomInput) {
   return run(async () => {
-    await assertPermission("properties_manage")
     const v = roomSchema.parse(input)
-    const supabase = await createClient()
-    check(
-      await supabase
+    requireRows(
+      await createClient()
         .from("rooms")
         .update({ number: v.number, floor: v.floor || null, room_type: v.roomType || null })
-        .eq("id", id),
+        .eq("id", id)
+        .select("id"),
     )
-    done(propertyId)
   })
 }
 
-export async function deleteRoom(id: string, propertyId: string) {
+export async function deleteRoom(id: string) {
   return run(async () => {
-    await assertPermission("properties_manage")
-    const supabase = await createClient()
-    check(await supabase.from("rooms").delete().eq("id", id))
-    done(propertyId)
+    requireRows(await createClient().from("rooms").delete().eq("id", id).select("id"))
   })
 }

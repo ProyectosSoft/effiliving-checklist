@@ -1,10 +1,9 @@
-"use server"
-
-import { revalidatePath } from "next/cache"
 import { z } from "zod"
-import { assertPermission } from "@/lib/auth"
-import { check, run } from "@/lib/actions"
-import { createClient } from "@/lib/supabase/server"
+import { check, requireRows, run } from "@/lib/actions"
+import { createClient } from "@/lib/supabase/client"
+import { sessionUserId } from "./session"
+
+// Permiso requerido (RLS): items_manage.
 
 const name = z.string().trim().min(1, "El nombre es obligatorio").max(200)
 const itemSchema = z.object({
@@ -13,11 +12,6 @@ const itemSchema = z.object({
 })
 
 type Direction = "up" | "down"
-
-function done() {
-  revalidatePath("/items")
-  revalidatePath("/reviews/new")
-}
 
 // Reasigna sort_order 1..n tras mover un elemento una posición.
 function reorder<T extends { id: string }>(rows: T[], id: string, direction: Direction) {
@@ -29,12 +23,26 @@ function reorder<T extends { id: string }>(rows: T[], id: string, direction: Dir
   return next.map((row, i) => ({ id: row.id, sort_order: i + 1 }))
 }
 
+export async function loadItemsTemplate() {
+  const { data, error } = await createClient()
+    .from("checklist_categories")
+    .select("id, name, sort_order, items:checklist_items(id, label, description, sort_order, active, created_at)")
+    .order("sort_order")
+    .order("created_at")
+  if (error) throw error
+  return (data ?? []).map((c) => ({
+    ...c,
+    items: [...c.items].sort(
+      (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || (a.created_at ?? "").localeCompare(b.created_at ?? ""),
+    ),
+  }))
+}
+
 // ---- Categorías -----------------------------------------------------------
 
 export async function createCategory(input: { name: string }) {
   return run(async () => {
-    await assertPermission("items_manage")
-    const supabase = await createClient()
+    const supabase = createClient()
     const { data: last } = await supabase
       .from("checklist_categories")
       .select("sort_order")
@@ -46,41 +54,40 @@ export async function createCategory(input: { name: string }) {
         .from("checklist_categories")
         .insert({ name: name.parse(input.name), sort_order: (last?.sort_order ?? 0) + 1 }),
     )
-    done()
   })
 }
 
 export async function updateCategory(id: string, input: { name: string }) {
   return run(async () => {
-    await assertPermission("items_manage")
-    const supabase = await createClient()
-    check(await supabase.from("checklist_categories").update({ name: name.parse(input.name) }).eq("id", id))
-    done()
+    requireRows(
+      await createClient()
+        .from("checklist_categories")
+        .update({ name: name.parse(input.name) })
+        .eq("id", id)
+        .select("id"),
+    )
   })
 }
 
 export async function deleteCategory(id: string) {
   return run(async () => {
-    await assertPermission("items_manage")
-    const supabase = await createClient()
-    check(await supabase.from("checklist_categories").delete().eq("id", id))
-    done()
+    requireRows(await createClient().from("checklist_categories").delete().eq("id", id).select("id"))
   })
 }
 
 export async function moveCategory(id: string, direction: Direction) {
   return run(async () => {
-    await assertPermission("items_manage")
-    const supabase = await createClient()
+    const supabase = createClient()
     const { data } = check(
       await supabase.from("checklist_categories").select("id").order("sort_order").order("created_at"),
     )
     const updates = reorder(data ?? [], id, direction)
     if (!updates) return
     for (const u of updates) {
-      check(await supabase.from("checklist_categories").update({ sort_order: u.sort_order }).eq("id", u.id))
+      requireRows(
+        await supabase.from("checklist_categories").update({ sort_order: u.sort_order }).eq("id", u.id).select("id"),
+      )
     }
-    done()
   })
 }
 
@@ -88,9 +95,9 @@ export async function moveCategory(id: string, direction: Direction) {
 
 export async function createItem(categoryId: string, input: { label: string; description?: string }) {
   return run(async () => {
-    const user = await assertPermission("items_manage")
+    const userId = await sessionUserId()
     const values = itemSchema.parse(input)
-    const supabase = await createClient()
+    const supabase = createClient()
     const { data: last } = await supabase
       .from("checklist_items")
       .select("sort_order")
@@ -104,56 +111,41 @@ export async function createItem(categoryId: string, input: { label: string; des
         label: values.label,
         description: values.description || null,
         sort_order: (last?.sort_order ?? 0) + 1,
-        created_by: user.id,
+        created_by: userId,
       }),
     )
-    done()
   })
 }
 
-export async function updateItem(
-  id: string,
-  input: { label: string; description?: string; categoryId: string },
-) {
+export async function updateItem(id: string, input: { label: string; description?: string; categoryId: string }) {
   return run(async () => {
-    await assertPermission("items_manage")
     const values = itemSchema.parse(input)
-    const supabase = await createClient()
-    check(
-      await supabase
+    requireRows(
+      await createClient()
         .from("checklist_items")
         .update({ label: values.label, description: values.description || null, category_id: input.categoryId })
-        .eq("id", id),
+        .eq("id", id)
+        .select("id"),
     )
-    done()
   })
 }
 
 export async function setItemActive(id: string, active: boolean) {
   return run(async () => {
-    await assertPermission("items_manage")
-    const supabase = await createClient()
-    check(await supabase.from("checklist_items").update({ active }).eq("id", id))
-    done()
+    requireRows(await createClient().from("checklist_items").update({ active }).eq("id", id).select("id"))
   })
 }
 
 export async function deleteItem(id: string) {
   return run(async () => {
-    await assertPermission("items_manage")
-    const supabase = await createClient()
-    check(await supabase.from("checklist_items").delete().eq("id", id))
-    done()
+    requireRows(await createClient().from("checklist_items").delete().eq("id", id).select("id"))
   })
 }
 
 export async function moveItem(id: string, direction: Direction) {
   return run(async () => {
-    await assertPermission("items_manage")
-    const supabase = await createClient()
-    const { data: item } = check(
-      await supabase.from("checklist_items").select("category_id").eq("id", id).single(),
-    )
+    const supabase = createClient()
+    const { data: item } = check(await supabase.from("checklist_items").select("category_id").eq("id", id).single())
     const { data } = check(
       await supabase
         .from("checklist_items")
@@ -165,8 +157,9 @@ export async function moveItem(id: string, direction: Direction) {
     const updates = reorder(data ?? [], id, direction)
     if (!updates) return
     for (const u of updates) {
-      check(await supabase.from("checklist_items").update({ sort_order: u.sort_order }).eq("id", u.id))
+      requireRows(
+        await supabase.from("checklist_items").update({ sort_order: u.sort_order }).eq("id", u.id).select("id"),
+      )
     }
-    done()
   })
 }

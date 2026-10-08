@@ -1,4 +1,4 @@
-import type { CurrentUser } from "@/lib/auth"
+import type { CurrentUser } from "@/components/auth-provider"
 
 // Misma regla que public.can_edit_review() en la base de datos.
 export function canEditReview(

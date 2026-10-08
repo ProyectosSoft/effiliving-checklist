@@ -1,10 +1,11 @@
 "use client"
 
-import { useState } from "react"
-import { useRouter } from "next/navigation"
+import { useEffect, useState } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import { useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
+import { useAuth } from "@/components/auth-provider"
 import { createClient } from "@/lib/supabase/client"
 
 const schema = z.object({
@@ -13,25 +14,36 @@ const schema = z.object({
 })
 type Values = z.infer<typeof schema>
 
-export function LoginForm({ nextPath, initialError }: { nextPath: string; initialError?: string }) {
+const ERRORS: Record<string, string> = {
+  inactivo: "Tu usuario está desactivado. Contacta a un administrador.",
+  enlace: "El enlace no es válido o ya expiró. Pide uno nuevo.",
+}
+
+export function LoginForm() {
   const router = useRouter()
-  const [error, setError] = useState(initialError)
+  const params = useSearchParams()
+  const { user, loading } = useAuth()
+  const next = params.get("next")
+  const nextPath = next?.startsWith("/") && !next.startsWith("//") ? next : "/dashboard/"
+  const [error, setError] = useState<string | undefined>(ERRORS[params.get("error") ?? ""])
   const {
     register,
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm<Values>({ resolver: zodResolver(schema) })
 
+  // Con sesión activa no tiene sentido mostrar el login.
+  useEffect(() => {
+    if (!loading && user?.active) router.replace(nextPath)
+  }, [loading, user, nextPath, router])
+
   async function onSubmit(values: Values) {
     setError(undefined)
-    const supabase = createClient()
-    const { error } = await supabase.auth.signInWithPassword(values)
+    const { error } = await createClient().auth.signInWithPassword(values)
     if (error) {
       setError(error.message === "Invalid login credentials" ? "Correo o contraseña incorrectos." : error.message)
-      return
     }
-    router.replace(nextPath)
-    router.refresh()
+    // Si entra bien, AuthProvider recarga el usuario y el efecto anterior redirige.
   }
 
   return (

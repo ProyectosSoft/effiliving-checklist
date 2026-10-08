@@ -1,26 +1,33 @@
-import { Suspense, type ReactNode } from "react"
+"use client"
+
+import { useEffect, type ReactNode } from "react"
+import { usePathname, useRouter } from "next/navigation"
 import { AppNav, type NavLink } from "@/components/app-nav"
-import { requireUser } from "@/lib/auth"
+import { useAuth } from "@/components/auth-provider"
+import { ROUTE_PERMISSIONS } from "@/lib/permissions"
 
-// Con cacheComponents, la lectura de la sesión (cookies) debe ocurrir dentro de <Suspense>.
+// Área autenticada: exige sesión y bloquea rutas de administración según el rol.
+// (La seguridad real la aplica RLS en Supabase; esto solo guía la navegación.)
 export default function AppLayout({ children }: { children: ReactNode }) {
-  return (
-    <Suspense fallback={<ShellFallback />}>
-      <AppShell>{children}</AppShell>
-    </Suspense>
-  )
-}
+  const { user, loading, signOut } = useAuth()
+  const router = useRouter()
+  const pathname = usePathname()
 
-function ShellFallback() {
-  return (
-    <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">Cargando…</div>
-  )
-}
+  const rule = ROUTE_PERMISSIONS.find((r) => pathname === r.prefix || pathname.startsWith(`${r.prefix}/`))
+  const forbidden = Boolean(user && rule && !user.permissions[rule.permission])
 
-async function AppShell({ children }: { children: ReactNode }) {
-  const user = await requireUser()
+  useEffect(() => {
+    if (loading) return
+    if (!user) router.replace(`/login/?next=${encodeURIComponent(pathname)}`)
+    else if (!user.active) void signOut().then(() => router.replace("/login/?error=inactivo"))
+    else if (forbidden) router.replace("/dashboard/?error=sin-permiso")
+  }, [loading, user, forbidden, pathname, router, signOut])
+
+  if (loading || !user || !user.active || forbidden) {
+    return <div className="flex min-h-screen items-center justify-center text-sm text-slate-500">Cargando…</div>
+  }
+
   const p = user.permissions
-
   const links: NavLink[] = [
     { href: "/dashboard", label: "Dashboard" },
     { href: "/reviews", label: "Revisiones" },
@@ -29,6 +36,8 @@ async function AppShell({ children }: { children: ReactNode }) {
     ...(p.properties_manage ? [{ href: "/properties", label: "Hoteles y habitaciones" }] : []),
     ...(p.users_manage ? [{ href: "/users", label: "Usuarios y roles" }] : []),
   ]
+
+  const logout = () => void signOut().then(() => router.replace("/login/"))
 
   return (
     <div className="min-h-screen md:flex">
@@ -45,9 +54,9 @@ async function AppShell({ children }: { children: ReactNode }) {
         <div className="hidden border-t border-slate-200 px-4 py-4 md:block">
           <p className="truncate text-sm font-medium">{user.fullName}</p>
           <p className="truncate text-xs text-slate-500 capitalize">{user.roleName ?? "sin rol"}</p>
-          <form action="/auth/signout" method="post" className="mt-3">
-            <button className="btn btn-sm w-full">Cerrar sesión</button>
-          </form>
+          <button className="btn btn-sm mt-3 w-full" onClick={logout}>
+            Cerrar sesión
+          </button>
         </div>
       </aside>
       <div className="min-w-0 flex-1">
@@ -55,9 +64,9 @@ async function AppShell({ children }: { children: ReactNode }) {
           <span className="truncate text-sm">
             {user.fullName} · <span className="text-slate-500 capitalize">{user.roleName ?? "sin rol"}</span>
           </span>
-          <form action="/auth/signout" method="post">
-            <button className="btn btn-sm">Salir</button>
-          </form>
+          <button className="btn btn-sm" onClick={logout}>
+            Salir
+          </button>
         </div>
         <main className="mx-auto max-w-6xl px-4 py-6 md:px-8 md:py-8">{children}</main>
       </div>

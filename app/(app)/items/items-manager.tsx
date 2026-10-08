@@ -13,7 +13,7 @@ import {
   setItemActive,
   updateCategory,
   updateItem,
-} from "./actions"
+} from "@/lib/data/items"
 
 type Item = { id: string; label: string; description: string | null; active: boolean | null }
 type Category = { id: string; name: string; items: Item[] }

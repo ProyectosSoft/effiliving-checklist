@@ -1,47 +1,69 @@
-import type { Metadata } from "next"
+"use client"
+
+import { Suspense, useState } from "react"
 import Link from "next/link"
+import { useSearchParams } from "next/navigation"
+import { useAuth } from "@/components/auth-provider"
 import { ReviewFilters } from "@/components/review-filters"
-import { Badge, EmptyState, PageHeader, toneFor } from "@/components/ui"
-import { requireUser } from "@/lib/auth"
+import { Badge, EmptyState, LoadError, Loading, PageHeader, toneFor } from "@/components/ui"
+import { useData } from "@/components/use-data"
 import { formatDate, label, REVIEW_STATUSES, REVIEW_TYPES } from "@/lib/constants"
-import { fetchResults, filtersToQuery, parseFilters, queryReviews, summarize } from "@/lib/reviews"
-import { createClient } from "@/lib/supabase/server"
+import { loadReviewList } from "@/lib/data/review-list"
+import { filtersToQuery, parseFilters, summarize } from "@/lib/reviews"
 
-export const metadata: Metadata = { title: "Revisiones" }
+export default function ReviewsPage() {
+  return (
+    <Suspense fallback={<Loading />}>
+      <ReviewsList />
+    </Suspense>
+  )
+}
 
-export default async function ReviewsPage({ searchParams }: PageProps<"/reviews">) {
-  const user = await requireUser()
-  const filters = parseFilters(await searchParams)
-  const supabase = await createClient()
+function ReviewsList() {
+  const { user } = useAuth()
+  const filters = parseFilters(useSearchParams())
+  const query = filtersToQuery(filters)
+  const { data, error } = useData(() => loadReviewList(filters), query)
+  const [exporting, setExporting] = useState(false)
+  const seeAll = user?.permissions.reviews_all ?? false
 
-  const [{ data: reviews, error }, { data: properties }, { data: profiles }] = await Promise.all([
-    queryReviews(supabase, filters),
-    supabase.from("properties").select("id, name").order("name"),
-    supabase.from("profiles").select("id, full_name").order("full_name"),
-  ])
+  async function exportAs(format: "pdf" | "xlsx") {
+    if (!data) return
+    setExporting(true)
+    try {
+      const { download, reviewsToPdf, reviewsToXlsx } = await import("@/lib/export")
+      const stamp = new Date().toISOString().slice(0, 10)
+      const filtersText = [filters.from && `desde ${filters.from}`, filters.to && `hasta ${filters.to}`]
+        .filter(Boolean)
+        .join(" ")
+      const blob =
+        format === "pdf"
+          ? reviewsToPdf(data.rows, data.results, filtersText)
+          : await reviewsToXlsx(data.rows, data.results)
+      download(blob, `revisiones-${stamp}.${format}`)
+    } finally {
+      setExporting(false)
+    }
+  }
 
-  const rows = reviews ?? []
-  const results = await fetchResults(supabase, rows.map((r) => r.id))
   const statusesByReview = new Map<string, (string | null)[]>()
-  for (const x of results) {
+  for (const x of data?.results ?? []) {
     if (x.review_id) statusesByReview.set(x.review_id, [...(statusesByReview.get(x.review_id) ?? []), x.status])
   }
-  const statsByReview = new Map(rows.map((r) => [r.id, summarize(statusesByReview.get(r.id) ?? [])]))
-  const query = filtersToQuery(filters)
 
   return (
     <>
       <PageHeader
         title="Revisiones"
-        description={user.permissions.reviews_all ? "Todas las revisiones" : "Tus revisiones"}
+        description={seeAll ? "Todas las revisiones" : "Tus revisiones"}
         actions={
           <>
-            <a className="btn" href={`/reviews/export?format=pdf${query ? `&${query}` : ""}`}>
+            <button className="btn" disabled={!data || exporting} onClick={() => exportAs("pdf")}>
               Exportar PDF
-            </a>
-            <a className="btn" href={`/reviews/export?format=xlsx${query ? `&${query}` : ""}`}>
+            </button>
+            <button className="btn" disabled={!data || exporting} onClick={() => exportAs("xlsx")}>
               Exportar Excel
-            </a>
+            </button>
             <Link className="btn btn-primary" href="/reviews/new">
               Nueva revisión
             </Link>
@@ -50,20 +72,20 @@ export default async function ReviewsPage({ searchParams }: PageProps<"/reviews"
       />
 
       <ReviewFilters
+        key={query}
         action="/reviews"
         filters={filters}
-        properties={properties ?? []}
-        inspectors={
-          user.permissions.reviews_all ? (profiles ?? []).map((p) => ({ id: p.id, name: p.full_name })) : undefined
-        }
+        properties={data?.properties ?? []}
+        inspectors={seeAll ? (data?.inspectors ?? []) : undefined}
         fields={["property", "room", "dates", "inspector", "status", "type"]}
       />
 
-      {error && <p className="mb-4 text-sm text-red-600">Error al cargar revisiones: {error.message}</p>}
+      {error && <LoadError message={error} />}
+      {!data && !error && <Loading />}
 
-      {rows.length === 0 ? (
-        <EmptyState>No hay revisiones con estos filtros.</EmptyState>
-      ) : (
+      {data && data.rows.length === 0 && <EmptyState>No hay revisiones con estos filtros.</EmptyState>}
+
+      {data && data.rows.length > 0 && (
         <div className="card overflow-x-auto p-0">
           <table className="table">
             <thead>
@@ -79,12 +101,12 @@ export default async function ReviewsPage({ searchParams }: PageProps<"/reviews"
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => {
-                const s = statsByReview.get(r.id)!
+              {data.rows.map((r) => {
+                const s = summarize(statusesByReview.get(r.id) ?? [])
                 return (
                   <tr key={r.id} className="hover:bg-slate-50">
                     <td className="whitespace-nowrap">
-                      <Link href={`/reviews/${r.id}`} className="font-medium text-brand-700 hover:underline">
+                      <Link href={`/reviews/view/?id=${r.id}`} className="font-medium text-brand-700 hover:underline">
                         {formatDate(r.review_date)}
                       </Link>
                     </td>

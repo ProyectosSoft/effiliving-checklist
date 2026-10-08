@@ -8,7 +8,7 @@ import { z } from "zod"
 import { Alert } from "@/components/ui"
 import { RESULT_STATUSES, REVIEW_TYPES, SIGNOFF_ROLES, type ResultStatus } from "@/lib/constants"
 import { compareNatural, groupByFloor } from "@/lib/rooms"
-import { saveReview } from "./actions"
+import { saveReview } from "@/lib/data/reviews"
 
 type Room = { id: string; number: string; floor: string | null; room_type: string | null }
 type Property = { id: string; name: string; rooms: Room[] }
@@ -120,7 +120,7 @@ export function ReviewForm({
           setError(result.error)
           return
         }
-        router.push(`/reviews/${result.data}`)
+        router.push(`/reviews/view/?id=${result.data}`)
         router.refresh()
       })
     })

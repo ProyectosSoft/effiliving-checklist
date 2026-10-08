@@ -33,3 +33,10 @@ export function check<T extends { error: PgError | null }>(result: T): T {
   if (result.error) throw result.error
   return result
 }
+
+// Un UPDATE/DELETE bloqueado por RLS no da error: solo afecta 0 filas.
+export function requireRows<T extends { data: unknown[] | null; error: PgError | null }>(result: T): T {
+  check(result)
+  if (!result.data?.length) throw new Error("No tienes permiso para realizar esta acción o el registro ya no existe.")
+  return result
+}

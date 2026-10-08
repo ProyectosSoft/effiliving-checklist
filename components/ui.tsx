@@ -60,3 +60,11 @@ export function Alert({ tone = "error", children }: { tone?: "error" | "info" | 
   }
   return <p className={`rounded-lg px-3 py-2 text-sm ${tones[tone]}`}>{children}</p>
 }
+
+export function Loading() {
+  return <div className="py-16 text-center text-sm text-slate-500">Cargando…</div>
+}
+
+export function LoadError({ message }: { message: string }) {
+  return <Alert>Error al cargar los datos: {message}</Alert>
+}
